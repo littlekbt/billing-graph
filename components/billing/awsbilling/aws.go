@@ -2,7 +2,6 @@ package awsbilling
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -17,58 +16,40 @@ type AWS struct {
 	SecretAccessKey string
 	Region          string
 	Currency        string
-
-	credentials *credentials.Credentials
-	cloudWatch  *cloudwatch.CloudWatch
 }
 
 // Get gets latest billing values.
-func (ab AWS) Get() int {
-	if ab.AccessKeyID != "" && ab.SecretAccessKey != "" {
-		ab.credentials = credentials.NewStaticCredentials(ab.AccessKeyID, ab.SecretAccessKey, "")
+func (ab AWS) Get() (map[string]float64, error) {
+
+	if ab.AccessKeyID == "" || ab.SecretAccessKey == "" {
+		return nil, errors.New("error: AccessKeyID or SecretAccessKey isn't defined")
 	}
 
-	ab.cloudWatch = cloudwatch.New(session.New(
+	credential := credentials.NewStaticCredentials(ab.AccessKeyID, ab.SecretAccessKey, "")
+
+	cw := cloudwatch.New(session.New(
 		&aws.Config{
-			Credentials: ab.credentials,
+			Credentials: credential,
 			Region:      aws.String(ab.Region),
 		},
 	))
 
-	billingMetricList, _ := ab.cloudWatch.ListMetrics(&cloudwatch.ListMetricsInput{Namespace: aws.String("AWS/Billing")})
-
-	targets := make([]string, 0)
+	// get target metric names
+	billingMetricList, _ := cw.ListMetrics(&cloudwatch.ListMetricsInput{Namespace: aws.String("AWS/Billing")})
+	r := make(map[string]float64)
 	for _, metric := range billingMetricList.Metrics {
-		for _, dimension := range metric.Dimensions {
-			if *dimension.Name == "ServiceName" {
-				targets = append(targets, *dimension.Value)
+		v, err := getLatestValue(cw, metric.Dimensions)
+		if err != nil {
+			continue
+		}
+		for _, d := range metric.Dimensions {
+			if *d.Name == "ServiceName" {
+				r[*d.Value] = v
 			}
 		}
 	}
 
-	baseDimension := []*cloudwatch.Dimension{&cloudwatch.Dimension{
-		Name:  aws.String("Currency"),
-		Value: aws.String(ab.Currency),
-	}}
-
-	for _, metricName := range targets {
-		var dimentions []*cloudwatch.Dimension
-		if metricName == "All" {
-			dimentions = baseDimension
-		} else {
-			dimentions = append(
-				[]*cloudwatch.Dimension{baseDimension[0]},
-				[]*cloudwatch.Dimension{&cloudwatch.Dimension{
-					Name:  aws.String("ServiceName"),
-					Value: aws.String(metricName),
-				}}...)
-		}
-
-		fmt.Println(metricName)
-		fmt.Println(getLatestValue(ab.cloudWatch, dimentions))
-	}
-
-	return 0
+	return r, nil
 }
 
 func getLatestValue(cloudWatch *cloudwatch.CloudWatch, dimensions []*cloudwatch.Dimension) (float64, error) {
