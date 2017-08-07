@@ -1,6 +1,8 @@
 package awsbilling
 
 import (
+	"fmt"
+
 	"errors"
 	"time"
 
@@ -37,11 +39,17 @@ func (ab AWS) Get() (map[string]float64, error) {
 	// get target metric names
 	billingMetricList, _ := cw.ListMetrics(&cloudwatch.ListMetricsInput{Namespace: aws.String("AWS/Billing")})
 	r := make(map[string]float64)
+
+	now := time.Now()
+	// yesterday
+	startTime := time.Unix(now.Unix()-86400, int64(now.Nanosecond()))
+
 	for _, metric := range billingMetricList.Metrics {
-		v, err := getLatestValue(cw, metric.Dimensions)
+		v, err := getLatestValue(cw, metric.Dimensions, startTime, now)
 		if err != nil {
 			continue
 		}
+
 		for _, d := range metric.Dimensions {
 			if *d.Name == "ServiceName" {
 				r[*d.Value] = v
@@ -52,27 +60,23 @@ func (ab AWS) Get() (map[string]float64, error) {
 	return r, nil
 }
 
-func getLatestValue(cloudWatch *cloudwatch.CloudWatch, dimensions []*cloudwatch.Dimension) (float64, error) {
-	now := time.Now()
-
-	startTime := time.Unix(now.Unix()-86400, int64(now.Nanosecond()))
-
+func getLatestValue(cw *cloudwatch.CloudWatch, dimensions []*cloudwatch.Dimension, start time.Time, end time.Time) (float64, error) {
 	statistics := []*string{aws.String("Maximum")}
 
 	in := &cloudwatch.GetMetricStatisticsInput{
 		Dimensions: dimensions,
-		StartTime:  aws.Time(startTime),
-		EndTime:    aws.Time(now),
+		StartTime:  aws.Time(start),
+		EndTime:    aws.Time(end),
 		Namespace:  aws.String("AWS/Billing"),
 		MetricName: aws.String("EstimatedCharges"),
 		Period:     aws.Int64(3600),
 		Statistics: statistics,
 	}
 
-	out, err := cloudWatch.GetMetricStatistics(in)
+	out, err := cw.GetMetricStatistics(in)
 
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 
 	datapoints := out.Datapoints
@@ -83,6 +87,8 @@ func getLatestValue(cloudWatch *cloudwatch.CloudWatch, dimensions []*cloudwatch.
 	var latest time.Time
 	var latestIndex int
 
+	fmt.Println(dimensions)
+	fmt.Println(datapoints)
 	for i, datapoint := range datapoints {
 		if datapoint.Timestamp.After(latest) {
 			latest = *datapoint.Timestamp
